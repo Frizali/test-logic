@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "TestingLogic": {
+      "commandName": "Project"
+    },
+    "Container (Dockerfile)": {
+      "commandName": "Docker"
+    }
+  }
+}
