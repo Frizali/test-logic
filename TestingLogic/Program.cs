@@ -1,57 +1,25 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.Diagnostics;
+using System.Linq;
+using System.Net.WebSockets;
 
 public class Program
 {
     public static void Main(string[] args)
     {
-        //var x = new List<DayExecute>()
-        //{
-        //    new DayExecute(){ DayId = DayOfWeek.Monday },
-        //    new DayExecute(){ DayId = DayOfWeek.Tuesday },
-        //    new DayExecute(){ DayId = DayOfWeek.Wednesday },
-        //    new DayExecute(){ DayId = DayOfWeek.Thursday },
-        //    new DayExecute(){ DayId = DayOfWeek.Friday },
-        //    new DayExecute(){ DayId = DayOfWeek.Saturday },
-        //}.ToDictionary(x => x.DayId);
-
-        //var startDate = new DateTime(2026, 01, 05);
-        //var endDate = new DateTime(2026, 01, 17);
-        //var totalWeek = 0;
-
-        //for(var date = startDate; date <= endDate; date = date.AddDays(1))
-        //{
-        //    var prevDayExec = false;
-
-        //    if(date.DayOfWeek > DayOfWeek.Monday)
-        //    {
-        //        x.TryGetValue((DayOfWeek)((int)date.DayOfWeek) - 1, out DayExecute? prevDay);
-        //        prevDayExec = prevDay?.Execute ?? false;
-        //    }
-
-        //    if(date.DayOfWeek == DayOfWeek.Monday || prevDayExec)
-        //    {
-        //        if(!x.TryGetValue(date.DayOfWeek, out DayExecute? day))
-        //             throw new InvalidOperationException($"Bruh");
-
-        //        day.Execute = true;
-        //    }
-
-        //    if(date.DayOfWeek == DayOfWeek.Saturday && !x.Any(x => !x.Value.Execute))
-        //    {
-        //        totalWeek++;
-        //        x.ToList().ForEach(x => x.Value.Execute = true);
-        //    }
-        //}
-
-        //if (totalWeek > 0)
-        //    Console.WriteLine($"Sukses Bro, Dipotong {totalWeek * 0.5}");
+        var longLeaveRemarkTaken = new List<string>()
+        {
+            "LAL",
+            "LAL05"
+        };
 
         var leaveHistories = new List<LeaveHistory>() { 
             new LeaveHistory(new DateTime(2025, 04, 30), LeaveType.Leave, 1),
-            new LeaveHistory(new DateTime(2015, 04, 30), LeaveType.Leave, 1)
+            new LeaveHistory(new DateTime(2015, 04, 30), LeaveType.Leave, 1),
+            new LeaveHistory(new DateTime(2021, 02, 10), LeaveType.Leave, 1, "LAL"),
         };
 
-        DateTime empJoin = new DateTime(2015, 01, 15);
+        DateTime empJoin = new DateTime(2015, 01, 04);
         DateTime lastBalanceDate = empJoin;
         DateTime date = new DateTime(2026, 01, 30);
 
@@ -61,8 +29,8 @@ public class Program
         // Melakukan penambahan bulanan sebelum masuk ke periode long leave
         if (lastBalanceDate < firstLongLeaveDate)
         {
-            PostAdditionalMonthly(empJoin, lastBalanceDate, firstLongLeaveDate, leaveHistories);
-            CalculateYearlyExpired(empJoin, firstLongLeaveDate, leaveHistories);
+            PostAdditionalMonthly(empJoin, lastBalanceDate, firstLongLeaveDate, leaveHistories, false);
+            CalculateYearlyExpired(empJoin, firstLongLeaveDate, leaveHistories, longLeaveRemarkTaken);
         }
 
         var maxYearIndex = longLeaveYears.Count - 1;
@@ -84,10 +52,12 @@ public class Program
                 {
                     // Tambahkan long leave balance 30
                     leaveHistories.Add(new LeaveHistory(longLeaveDate, LeaveType.Long, 30));
+                    if (i == 0)
+                        CalcExpiredLeaveInFisrtOfLongLeave(empJoin, longLeaveDate, date, leaveHistories, longLeaveRemarkTaken);
 
                     // Balance akan expired jika tanggal posting melebihi tanggal expired
-                    if(date > longLeaveExpired)
-                        CalculateLongLeaveExpired(longLeaveDate, longLeaveExpired, leaveHistories);
+                    if (date > longLeaveExpired)
+                        CalculateLongLeaveExpired(longLeaveDate, longLeaveExpired, leaveHistories, longLeaveRemarkTaken);
                 }
             }                
 
@@ -106,22 +76,24 @@ public class Program
                 }
 
                 // Penambahan cuti bulanan mulai dari tanggal Cut Off Additional sampai tanggal Post Date Limit
-                PostAdditionalMonthly(empJoin, cutOffDateAdditional, postDateLimit, leaveHistories);
+                PostAdditionalMonthly(empJoin, cutOffDateAdditional, postDateLimit, leaveHistories, true);
             }
 
             yearIndex++;
         }
 
-        Recalculate(leaveHistories);
+        Recalculate(leaveHistories, longLeaveRemarkTaken);
     }
 
-    public static void Recalculate(List<LeaveHistory> leaveHistories)
+    public static void Recalculate(List<LeaveHistory> leaveHistories, List<string> longLeaveRemarkTaken)
     {
         leaveHistories = leaveHistories.OrderBy(l => l.DateID).ThenBy(l => l.Type).ToList();
 
         double tmpTotalBalance = 0;
         double tmpCurrentBalance = 0;
         double tmpLeaveTaken = 0;
+        double tmpLongLeave = 0;
+        double tmpLongLeaveTaken = 0;
         double tmpExpiredLeave = 0;
 
         foreach(var leave in leaveHistories)
@@ -129,24 +101,34 @@ public class Program
             switch (leave.Type)
             {
                 case LeaveType.Additional:
+                case LeaveType.Long:
+                    if (leave.Type == LeaveType.Long)
+                        tmpLongLeave = leave.TotalDay;
+
                     leave.LastBalance = tmpCurrentBalance;
                     tmpTotalBalance += leave.TotalDay;
                     tmpCurrentBalance += leave.TotalDay;
                     leave.CurrentBalance = tmpCurrentBalance;
                     break;
                 case LeaveType.Balance:
-                case LeaveType.Long:
                     tmpTotalBalance += leave.TotalDay;
                     tmpCurrentBalance = leave.TotalDay;
                     leave.CurrentBalance = tmpCurrentBalance;
                     break;
                 case LeaveType.Leave:
+                    if (longLeaveRemarkTaken.Contains(leave.RemarkID))
+                        tmpLongLeaveTaken += leave.TotalDay;
+
                     tmpLeaveTaken += leave.TotalDay;
                     leave.LastBalance = tmpCurrentBalance;
                     tmpCurrentBalance -= leave.TotalDay;
                     leave.CurrentBalance = tmpCurrentBalance;
                     break;
                 case LeaveType.Expired:
+                case LeaveType.ExpiredLongLeave:
+                    if (leave.Type == LeaveType.ExpiredLongLeave)
+                        tmpLongLeaveTaken += leave.TotalDay;
+
                     tmpExpiredLeave += leave.TotalDay;
                     leave.LastBalance = tmpCurrentBalance;
                     tmpCurrentBalance -= leave.TotalDay;
@@ -156,7 +138,7 @@ public class Program
         }
 
         foreach(var leave in leaveHistories)
-            Console.WriteLine($"Type: {leave.Type.ToString()}, Date: {leave.DateID.Date.ToString("MMMM dd yyyy")}, LastBalance: {leave.LastBalance}, TotalDay: {leave.TotalDay}, CurrentBalance: {leave.CurrentBalance}");
+            Console.WriteLine($"Type: {leave.Type}, Date: {leave.DateID.Date.ToString("MMMM dd yyyy")}, LastBalance: {leave.LastBalance}, TotalDay: {leave.TotalDay}, CurrentBalance: {leave.CurrentBalance}");
     }
 
     public static List<int> GetLongLeaveYears(DateTime empJoin, DateTime date, out int firstLongLeaveYear)
@@ -193,9 +175,13 @@ public class Program
             return true;
     }
 
-    public static void PostAdditionalMonthly(DateTime empJoin, DateTime startDate, DateTime endDate, List<LeaveHistory> leaveHistories)
+    public static void PostAdditionalMonthly(DateTime empJoin, DateTime startDate, DateTime endDate, List<LeaveHistory> leaveHistories, bool isAdditionalAfterLongLeave)
     {
-        var tmpAdditionalDate = new DateTime(startDate.Year, startDate.Month, 1);
+        //var tmpAdditionalDate = new DateTime(startDate.Year, startDate.Month, 1);
+        var tmpAdditionalDate = startDate;
+
+        if (isAdditionalAfterLongLeave && !IsGetAdditionalWithLongLeave(empJoin))
+            tmpAdditionalDate = tmpAdditionalDate.AddMonths(-1);
 
         while (IsGetAdditionalWithLongLeave(empJoin) ? tmpAdditionalDate.AddMonths(1) <= endDate : tmpAdditionalDate.AddMonths(1) < endDate)
         {
@@ -204,8 +190,9 @@ public class Program
         }
     }
 
-    public static void CalculateYearlyExpired(DateTime empJoin, DateTime date, List<LeaveHistory> leaveHistories)
+    public static void CalculateYearlyExpired(DateTime empJoin, DateTime date, List<LeaveHistory> leaveHistories, List<string> longLeaveRemarkTaken)
     {
+        date = date.AddYears(1);
         var minExpiredYear = empJoin.Year;
         var maxExpiredYear = date.Year;
         var expiredDate = new DateTime(minExpiredYear + 1, 06, 30);
@@ -220,10 +207,10 @@ public class Program
                 .Sum(l => l.TotalDay);
 
             var totalLeaveTaken = leaveHistories
-                .Where(l => l.Type == LeaveType.Leave && (l.DateID >= minRange && l.DateID < expiredDate))
+                .Where(l => l.Type == LeaveType.Leave && (l.DateID >= minRange && l.DateID < expiredDate) && !longLeaveRemarkTaken.Contains(l.RemarkID))
                 .Sum(l => l.TotalDay);
 
-            var totalExpired = totalLeaveTaken >= (totalAdditionalBalance < 12 ? totalAdditionalBalance : 12) ? 0 : (totalAdditionalBalance < 12 ? totalAdditionalBalance : 12) - totalLeaveTaken;
+            var totalExpired = totalLeaveTaken >= totalAdditionalBalance ? 0 : totalAdditionalBalance - totalLeaveTaken;
 
             if(date > expiredDate)
                 leaveHistories.Add(new LeaveHistory(expiredDate, LeaveType.Expired, totalExpired));
@@ -233,7 +220,37 @@ public class Program
         }
     }
 
-    public static void CalculateLongLeaveExpired(DateTime longLeaveDate, DateTime expiredDate, List<LeaveHistory> leaveHistories)
+    public static void CalcExpiredLeaveInFisrtOfLongLeave(DateTime empJoin, DateTime longLeaveDate, DateTime date, List<LeaveHistory> leaveHistories, List<string> longLeaveRemarkTaken)
+    {
+        var monthOfJoin = empJoin.Month;
+        var additionalYear = longLeaveDate.Year;
+        var expiredDate = new DateTime(additionalYear + 1, 06, 30);
+
+        var minRange = new DateTime(additionalYear, 01, 01);
+        var maxRange = new DateTime(additionalYear, 12, DateTime.DaysInMonth(additionalYear, 12));
+        var isGetAddWithLongLeave = IsGetAdditionalWithLongLeave(empJoin);
+
+        if (monthOfJoin == 1 && !isGetAddWithLongLeave)
+            return;
+
+        if (isGetAddWithLongLeave)
+        {
+            var totalAdditionalBalance = leaveHistories
+                .Where(l => l.Type == LeaveType.Additional && (l.DateID >= minRange && l.DateID < maxRange))
+                .Sum(l => l.TotalDay);
+
+            var totalLeaveTaken = leaveHistories
+                .Where(l => l.Type == LeaveType.Leave && (l.DateID >= minRange && l.DateID < expiredDate) && !longLeaveRemarkTaken.Contains(l.RemarkID))
+                .Sum(l => l.TotalDay);
+
+            var totalExpired = totalLeaveTaken >= totalAdditionalBalance ? 0 : totalAdditionalBalance - totalLeaveTaken;
+
+            if (date > expiredDate)
+                leaveHistories.Add(new LeaveHistory(expiredDate, LeaveType.Expired, totalExpired));
+        }
+    }
+
+    public static void CalculateLongLeaveExpired(DateTime longLeaveDate, DateTime expiredDate, List<LeaveHistory> leaveHistories, List<string> longLeaveRemarkTaken)
     {
         if (leaveHistories == null || leaveHistories.Count == 0)
             return;
@@ -243,15 +260,19 @@ public class Program
             .Sum(l => l.TotalDay);
 
         var totalLeaveTaken = leaveHistories
-            .Where(l => l.Type == LeaveType.Leave && (l.DateID >= longLeaveDate && l.DateID < expiredDate))
+            .Where(l => l.Type == LeaveType.Leave && (l.DateID >= longLeaveDate && l.DateID < expiredDate) && longLeaveRemarkTaken.Contains(l.RemarkID))
             .Sum(l => l.TotalDay);
+
+        //var totalExpiredLeave = leaveHistories
+        //    .Where(l => l.Type == LeaveType.Expired && (l.DateID >= longLeaveDate && l.DateID < expiredDate))
+        //    .Sum(l => l.TotalDay);
 
         var expiredBalance = Math.Max(0, totalBalance - totalLeaveTaken);
 
         if (expiredBalance == 0)
             return;
 
-        leaveHistories.Add(new LeaveHistory(expiredDate, LeaveType.Expired, expiredBalance)); 
+        leaveHistories.Add(new LeaveHistory(expiredDate, LeaveType.ExpiredLongLeave, expiredBalance)); 
     }
 
     public enum LeaveType
@@ -260,28 +281,25 @@ public class Program
         Balance,
         Long,
         Leave,
-        Expired
+        Expired,
+        ExpiredLongLeave
     }
 
     public class LeaveHistory
     {
         public DateTime DateID { get; set; }
         public LeaveType Type { get; set; }
+        public string RemarkID { get; set; }
         public double LastBalance { get; set; }
         public double TotalDay { get; set; }
         public double CurrentBalance { get; set; }
 
-        public LeaveHistory(DateTime dateId, LeaveType type, double totalDay)
+        public LeaveHistory(DateTime dateId, LeaveType type, double totalDay, string remarkId = "")
         {
             DateID = dateId;
             Type = type;
             TotalDay = totalDay;
+            RemarkID = remarkId;
         }
-    }
-
-    public class DayExecute
-    {
-        public DayOfWeek DayId { get; set; }
-        public bool Execute { get; set; } = false;
     }
 }
